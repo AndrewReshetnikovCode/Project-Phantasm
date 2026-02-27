@@ -1,0 +1,10 @@
+[project]
+name = "Hello Phantasm"
+version = "0.1.0"
+description = "Demo game showcasing Phantasm engine capabilities"
+
+[engine]
+target_fps = 30
+
+[scenes]
+default = "scenes/main.json"

@@ -1,0 +1,12 @@
+[package]
+name = "phantasm-script"
+version = "0.1.0"
+edition = "2021"
+description = "Luau scripting engine for Phantasm"
+
+[dependencies]
+phantasm-core = { path = "../phantasm-core" }
+mlua = { version = "0.10", features = ["luau", "serialize"] }
+serde_json = { workspace = true }
+anyhow = { workspace = true }
+log = { workspace = true }

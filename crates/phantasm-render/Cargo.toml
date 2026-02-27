@@ -1,0 +1,11 @@
+[package]
+name = "phantasm-render"
+version = "0.1.0"
+edition = "2021"
+description = "Console/terminal renderer for Phantasm engine"
+
+[dependencies]
+phantasm-core = { path = "../phantasm-core" }
+crossterm = { workspace = true }
+anyhow = { workspace = true }
+log = { workspace = true }
