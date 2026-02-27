@@ -1,0 +1,12 @@
+[package]
+name = "phantasm-core"
+version = "0.1.0"
+edition = "2021"
+description = "Core ECS and world management for Phantasm engine"
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+toml = { workspace = true }
+anyhow = { workspace = true }
+log = { workspace = true }

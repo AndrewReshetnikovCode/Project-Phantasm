@@ -1,0 +1,12 @@
+[package]
+name = "phantasm-input"
+version = "0.1.0"
+edition = "2021"
+description = "Input system with action-map and record/replay for Phantasm engine"
+
+[dependencies]
+crossterm = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+anyhow = { workspace = true }
+log = { workspace = true }

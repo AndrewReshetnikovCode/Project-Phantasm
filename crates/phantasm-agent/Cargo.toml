@@ -1,0 +1,13 @@
+[package]
+name = "phantasm-agent"
+version = "0.1.0"
+edition = "2021"
+description = "AI-agent JSON-RPC server for Phantasm engine"
+
+[dependencies]
+phantasm-core = { path = "../phantasm-core" }
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+anyhow = { workspace = true }
+log = { workspace = true }

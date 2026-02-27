@@ -1,0 +1,26 @@
+[package]
+name = "phantasm-engine"
+version = "0.1.0"
+edition = "2021"
+description = "Phantasm game engine main binary"
+
+[[bin]]
+name = "phantasm"
+path = "src/main.rs"
+
+[dependencies]
+phantasm-core = { path = "../phantasm-core" }
+phantasm-render = { path = "../phantasm-render" }
+phantasm-input = { path = "../phantasm-input" }
+phantasm-audio = { path = "../phantasm-audio" }
+phantasm-script = { path = "../phantasm-script" }
+phantasm-agent = { path = "../phantasm-agent" }
+mlua = { version = "0.10", features = ["luau"] }
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+toml = { workspace = true }
+clap = { workspace = true }
+env_logger = { workspace = true }
+anyhow = { workspace = true }
+log = { workspace = true }
