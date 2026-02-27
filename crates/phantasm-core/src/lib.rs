@@ -255,6 +255,54 @@ impl World {
         Ok(())
     }
 
+    pub fn find_by_name(&self, pattern: &str) -> Vec<EntityId> {
+        let pattern_lower = pattern.to_lowercase();
+        let mut result: Vec<EntityId> = self
+            .query(&["Name"])
+            .into_iter()
+            .filter(|&id| {
+                self.get(id, "Name")
+                    .and_then(|v| v.get("name"))
+                    .and_then(|v| v.as_str())
+                    .is_some_and(|n| n.to_lowercase().contains(&pattern_lower))
+            })
+            .collect();
+        result.sort();
+        result
+    }
+
+    pub fn find_by_component(&self, component: &str) -> Vec<EntityId> {
+        self.query(&[component])
+    }
+
+    pub fn duplicate(&mut self, entity: EntityId) -> Option<EntityId> {
+        if !self.alive.contains(&entity) {
+            return None;
+        }
+        let components = self.entity_components(entity);
+        let new_entity = self.spawn();
+        for (name, data) in components {
+            let _ = self.insert(new_entity, &name, data);
+        }
+        Some(new_entity)
+    }
+
+    pub fn export_scene(&self) -> Value {
+        let mut entities_array = Vec::new();
+        let mut sorted: Vec<EntityId> = self.alive.iter().copied().collect();
+        sorted.sort();
+        for entity_id in sorted {
+            let components = self.entity_components(entity_id);
+            let comp_map: serde_json::Map<String, Value> = components.into_iter().collect();
+            entities_array.push(Value::Object(comp_map));
+        }
+        serde_json::json!({ "entities": entities_array })
+    }
+
+    pub fn entity_count(&self) -> usize {
+        self.alive.len()
+    }
+
     pub fn text_capture(&self) -> String {
         let entities = self.query(&["Position", "Glyph"]);
         if entities.is_empty() {
@@ -402,6 +450,56 @@ mod tests {
         let lines: Vec<&str> = capture.lines().collect();
         assert_eq!(lines.len(), 2);
         assert_eq!(lines[1].chars().nth(2), Some('@'));
+    }
+
+    #[test]
+    fn find_by_name_case_insensitive() {
+        let mut world = World::new();
+        let e1 = world.spawn();
+        let e2 = world.spawn();
+        world
+            .insert(e1, "Name", serde_json::json!({"name": "Gold Coin"}))
+            .unwrap();
+        world
+            .insert(e2, "Name", serde_json::json!({"name": "Silver Coin"}))
+            .unwrap();
+
+        assert_eq!(world.find_by_name("coin").len(), 2);
+        assert_eq!(world.find_by_name("gold").len(), 1);
+        assert_eq!(world.find_by_name("GOLD").len(), 1);
+        assert_eq!(world.find_by_name("dragon").len(), 0);
+    }
+
+    #[test]
+    fn duplicate_entity() {
+        let mut world = World::new();
+        let e = world.spawn();
+        world
+            .insert(e, "Position", serde_json::json!({"x": 5, "y": 10}))
+            .unwrap();
+        world
+            .insert(e, "Name", serde_json::json!({"name": "Original"}))
+            .unwrap();
+
+        let dup = world.duplicate(e).unwrap();
+        assert_ne!(e, dup);
+        assert_eq!(
+            world.get(dup, "Position"),
+            Some(&serde_json::json!({"x": 5, "y": 10}))
+        );
+    }
+
+    #[test]
+    fn export_scene_format() {
+        let mut world = World::new();
+        let e = world.spawn();
+        world
+            .insert(e, "Position", serde_json::json!({"x": 1, "y": 2}))
+            .unwrap();
+        let scene = world.export_scene();
+        let entities = scene["entities"].as_array().unwrap();
+        assert_eq!(entities.len(), 1);
+        assert_eq!(entities[0]["Position"]["x"], 1);
     }
 
     #[test]

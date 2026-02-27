@@ -1,9 +1,9 @@
-use std::path::Path;
-use std::sync::{Arc, Mutex};
+use std::path::PathBuf;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use clap::Parser;
-use phantasm_agent::{AgentServer, ScriptCommand};
+use phantasm_agent::{AgentServer, DevSession, ScriptCommand};
 use phantasm_core::World;
 use phantasm_input::InputSystem;
 use phantasm_render::ConsoleRenderer;
@@ -33,18 +33,18 @@ fn main() -> anyhow::Result<()> {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
     let args = Args::parse();
 
-    log::info!("Phantasm Engine v0.1.0 starting...");
+    log::info!("Phantasm Engine v0.2.0 starting...");
     log::info!("Project: {}", args.project);
     log::info!(
         "Mode: {}",
         if args.headless {
-            "headless"
+            "headless (development)"
         } else {
             "interactive"
         }
     );
 
-    let project_path = Path::new(&args.project);
+    let project_path = PathBuf::from(&args.project);
     let config_path = project_path.join("project.toml");
     let config_str = std::fs::read_to_string(&config_path).unwrap_or_else(|_| {
         log::warn!(
@@ -74,7 +74,6 @@ fn main() -> anyhow::Result<()> {
         log::warn!("Scene file not found: {}", scene_path.display());
     }
 
-    // Audio (graceful — won't crash if no device)
     let _audio = phantasm_audio::AudioEngine::new();
 
     let mut script_engine = ScriptEngine::new().map_err(lua_err)?;
@@ -106,49 +105,50 @@ fn main() -> anyhow::Result<()> {
 
     log::info!(
         "World initialized: {} entities, {} component types",
-        world.alive.len(),
+        world.entity_count(),
         world.schemas.len()
     );
 
-    let world = Arc::new(Mutex::new(world));
-    let script_commands: Arc<Mutex<Vec<ScriptCommand>>> = Arc::new(Mutex::new(Vec::new()));
+    let session = Arc::new(DevSession::new(world, project_path));
 
     let agent_addr = format!("0.0.0.0:{}", args.port);
-    let world_for_agent = world.clone();
-    let cmds_for_agent = script_commands.clone();
+    let session_for_agent = session.clone();
     std::thread::spawn(move || {
         let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async {
-            if let Err(e) = AgentServer::start(&agent_addr, world_for_agent, cmds_for_agent).await {
+            if let Err(e) = AgentServer::start(&agent_addr, session_for_agent).await {
                 log::error!("Agent server error: {}", e);
             }
         });
     });
 
     if args.headless {
-        run_headless(world, script_commands, &mut script_engine, args.port)
+        run_headless(session, &mut script_engine, args.port)
     } else {
-        run_interactive(world, script_commands, &mut script_engine, args.port)
+        run_interactive(session, &mut script_engine, args.port)
     }
 }
 
 fn run_headless(
-    world: Arc<Mutex<World>>,
-    script_commands: Arc<Mutex<Vec<ScriptCommand>>>,
+    session: Arc<DevSession>,
     script_engine: &mut ScriptEngine,
     port: u16,
 ) -> anyhow::Result<()> {
     log::info!(
-        "Headless mode active. Agent server on port {}. Ctrl+C to exit.",
+        "Headless development mode. Agent server on port {}. Ctrl+C to exit.",
         port
     );
 
     let running = Arc::new(std::sync::atomic::AtomicBool::new(true));
     let r = running.clone();
-    ctrlc_handler(r);
+    unsafe {
+        libc_signal(2, move || {
+            r.store(false, std::sync::atomic::Ordering::Relaxed);
+        });
+    }
 
     while running.load(std::sync::atomic::Ordering::Relaxed) {
-        process_script_commands(&script_commands, script_engine);
+        process_script_commands(&session, script_engine);
 
         for msg in script_engine.drain_logs() {
             log::info!("[Luau] {}", msg);
@@ -158,14 +158,17 @@ fn run_headless(
     }
 
     log::info!("Shutting down...");
-    let w = world.lock().unwrap();
-    log::info!("Final state: {} entities, frame {}", w.alive.len(), w.frame);
+    let w = session.world.lock().unwrap();
+    log::info!(
+        "Final state: {} entities, frame {}",
+        w.entity_count(),
+        w.frame
+    );
     Ok(())
 }
 
 fn run_interactive(
-    world: Arc<Mutex<World>>,
-    script_commands: Arc<Mutex<Vec<ScriptCommand>>>,
+    session: Arc<DevSession>,
     script_engine: &mut ScriptEngine,
     port: u16,
 ) -> anyhow::Result<()> {
@@ -181,7 +184,7 @@ fn run_interactive(
     loop {
         let frame_start = Instant::now();
 
-        process_script_commands(&script_commands, script_engine);
+        process_script_commands(&session, script_engine);
 
         let should_quit = input.poll(0);
         if should_quit {
@@ -192,7 +195,7 @@ fn run_interactive(
         let dt = frame_duration.as_secs_f64();
 
         {
-            let mut w = world.lock().unwrap();
+            let mut w = session.world.lock().unwrap();
 
             if let Err(e) = script_engine.call_update(&mut w, dt, &pressed) {
                 renderer.add_message(format!("Script error: {}", e));
@@ -219,12 +222,9 @@ fn run_interactive(
     Ok(())
 }
 
-fn process_script_commands(
-    script_commands: &Arc<Mutex<Vec<ScriptCommand>>>,
-    script_engine: &mut ScriptEngine,
-) {
+fn process_script_commands(session: &Arc<DevSession>, script_engine: &mut ScriptEngine) {
     let pending: Vec<ScriptCommand> = {
-        let mut cmds = script_commands.lock().unwrap();
+        let mut cmds = session.script_commands.lock().unwrap();
         cmds.drain(..).collect()
     };
 
@@ -234,26 +234,20 @@ fn process_script_commands(
                 if let Err(e) = script_engine.load_script(&source) {
                     log::error!("Script load error: {}", e);
                 } else {
-                    log::info!("Script loaded via agent");
+                    let mut w = session.world.lock().unwrap();
+                    if let Err(e) = script_engine.call_init(&mut w) {
+                        log::error!("Script init error: {}", e);
+                    }
+                    for msg in script_engine.drain_logs() {
+                        log::info!("[Luau] {}", msg);
+                    }
+                    log::info!("Script loaded and initialized via agent");
                 }
             }
         }
     }
 }
 
-fn ctrlc_handler(running: Arc<std::sync::atomic::AtomicBool>) {
-    let _ = ctypes_set_handler(running);
-}
-
-fn ctypes_set_handler(running: Arc<std::sync::atomic::AtomicBool>) -> Result<(), ()> {
-    unsafe {
-        libc_signal(2, move || {
-            running.store(false, std::sync::atomic::Ordering::Relaxed);
-        });
-    }
-    Ok(())
-}
-
 unsafe fn libc_signal<F: Fn() + Send + 'static>(_signum: i32, _handler: F) {
-    // Minimal signal handling - relies on process termination for cleanup
+    // Minimal signal handling
 }
